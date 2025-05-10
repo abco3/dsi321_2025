@@ -33,7 +33,7 @@ services:
     command: prefect server start --host 0.0.0.0
     environment:
       - PREFECT_API_URL=http://prefect-server:4200/api  
-      - PREFECT_SERVER_DATABASE_CONNECTION_URL=postgresql+asyncpg://prefect:prefect@postgres:5432/prefect  # ใช้ PostgreSQL
+      - PREFECT_SERVER_DATABASE_CONNECTION_URL=postgresql+asyncpg://prefect:prefect@postgres:5432/prefect
     ports:
       - "4200:4200"
     depends_on:
@@ -74,6 +74,17 @@ services:
       - ./work:/home/jovyan/work:rw
     environment:
       - PREFECT_API_URL=http://prefect-server:4200/api  
+    networks:
+      - prefect-network
+
+  prefect-agent:
+    image: prefecthq/prefect:latest
+    command: ["prefect", "agent", "start", "--watch"]
+    environment:
+      - PREFECT_API_URL=http://prefect-server:4200/api
+    depends_on:
+      - prefect-server
+    networks:
       - prefect-network
 
   streamlit:
@@ -88,18 +99,8 @@ services:
     networks:
       - prefect-network
 
-  prefect-agent:
-    image: prefecthq/prefect:latest  
-    command: ["prefect", "agent", "start", "--watch"]  
-    environment:
-      PREFECT_API_URL: http://prefect-server:4200/api 
-    depends_on:
-      - prefect-server
-    networks:
-      - prefect-network
-
 volumes:
-  postgres_data: 
+  postgres_data:
 
 networks:
   prefect-network:

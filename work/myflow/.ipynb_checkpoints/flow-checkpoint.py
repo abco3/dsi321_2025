@@ -1,123 +1,147 @@
 import requests
+import geopandas as gpd
 import pandas as pd
-from datetime import datetime
-import pytz
-from prefect import flow, task # Prefect flow and task decorators
+from shapely.geometry import Point
+from pathlib import Path
+from prefect import flow, task
+
 
 @task
-def get_weather_data(province_context={'province':None, 'lat':None, 'lon':None}):
-    # API endpoint and parameters
-    WEATHER_ENDPOINT = "https://api.openweathermap.org/data/2.5/weather"
-    API_KEY = "d43d60c19ddd47c8e6d4c0266e4bcecd"  # Replace with your actual API key
-    province=province_context['province']
-    
-    params = {
-        "lat": province_context['lat'],
-        "lon": province_context['lon'],
-        "appid": API_KEY,
-        "units": "metric"
-    }
+def fetch_data() -> list[dict]:
     try:
-        # Make API request
-        response = requests.get(WEATHER_ENDPOINT, params=params)
-        response.raise_for_status()  # Raise an exception for bad status codes
+        url = 'http://air4thai.pcd.go.th/services/getNewAQI_JSON.php'
+        response = requests.get(url)
+        response.raise_for_status()
+
         data = response.json()
-        
-        # Convert timestamp to datetime
-        # created_at = datetime.fromtimestamp(data['dt'])
-
-        dt = datetime.now()
-        thai_tz = pytz.timezone('Asia/Bangkok')
-        created_at = dt.replace(tzinfo=thai_tz)
-
-
-        timestamp = datetime.now()
-        
-        # Create dictionary with required fields
-        weather_dict = {
-            'timestamp': timestamp,
-            'year': timestamp.year,
-            'month': timestamp.month,
-            'day': timestamp.day,
-            'hour': timestamp.hour,
-            'minute': timestamp.minute,
-            'created_at': created_at,
-            'requested_province':province,
-            'location': data['name'],
-            'weather_main': data['weather'][0]['main'],
-            'weather_description': data['weather'][0]['description'],
-            'main.temp': data['main']['temp']
-        }
-        
-        # Create DataFrame
-        # df = pd.DataFrame([weather_dict])
-        
-        # return df
-        return weather_dict
-
-    
-    except requests.exceptions.RequestException as e:
+        return data['stations']
+    except requests.RequestException as e:
         print(f"Error fetching data: {e}")
         return None
-    except KeyError as e:
-        print(f"Error processing data: Missing key {e}")
-        return None
-        
-@flow(name="main-flow", log_prints=True)
-def main_flow(parameters={}):
-    provinces = {
-    "Pathum Thani":{
-        "lat": 14.0134,
-        "lon": 100.5304
-    },
-    "Bangkok":{
-            "lat": 13.7367,
-            "lon": 100.5232
-    },
-    "Chiang Mai":{
-        "lat": 18.7883,
-        "lon": 98.9853
-    },
-    "Phuket":{
-        "lat": 7.9519,
-        "lon": 98.3381
-    }
-}
-        
-    df=pd.DataFrame([get_weather_data(
-        {
-            'province':province,
-            'lat':provinces[province]['lat'],
-            'lon':provinces[province]['lon'],
-        }
-    ) for province in list(provinces.keys())])
+
+
+@task
+def data_processing(data: list[dict], districts_gdf: gpd.GeoDataFrame) -> pd.DataFrame:
+    df = pd.DataFrame(data)
+
+    print("Sample AQILast:")
+    print(df['AQILast'].dropna().iloc[0])       
+    aqi_data = pd.json_normalize(df['AQILast'])
+    df = pd.concat([df, aqi_data], axis=1)
+
+    pollutant_cols = [
+        'AQI.aqi', 'AQI.color_id',
+        'PM25.value', 'PM25.color_id',
+        'PM10.value', 'PM10.color_id',
+        'O3.value', 'NO2.value', 'CO.value'
+    ]
+
+    for col in pollutant_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        else:
+            print(f"Warning: Column '{col}' not found in DataFrame")
+
+    df['time'] = df['time'].mode()[0]
+    df['date'] = df['date'].mode()[0]
+    df['timestamp'] = pd.to_datetime(df['date'] + ' ' + df['time'])
+
+    df['year'] = df['timestamp'].dt.year
+    df['month'] = df['timestamp'].dt.month
+    df['day'] = df['timestamp'].dt.day
+    df['hour'] = df['timestamp'].dt.hour
+
+    # geometry and spatial join
+    stations_gdf = gpd.GeoDataFrame(
+        df,
+        geometry=df.apply(lambda r: Point(r['long'], r['lat']), axis=1),
+        crs='epsg:4326'
+    )
+
+    joined = gpd.sjoin(
+        stations_gdf,
+        districts_gdf[['dname', 'geometry']],
+        how='left',
+        predicate='within'
+    )
+
+    # del --เขต
+    df['district'] = joined['dname'].str.replace("เขต", "", regex=False).str.strip()
+    df = df[df['district'].notna()]
+
+    # sort
+    selected_cols = [
+        'timestamp', 'year', 'month', 'day', 'hour',
+        'stationID', 'nameTH', 'areaTH', 'district', 'lat', 'long'
+    ] + pollutant_cols
+
+    return df[selected_cols]
+
+
+@task
+def load_to_lakefs(df: pd.DataFrame, lakefs_s3_path: str, storage_options: dict):
+    print(f"Saving to: {lakefs_s3_path}")
+    print(f"Storage options: {storage_options}")
+
+    df['timestamp'] = df['timestamp'].dt.strftime('%d/%m/%Y %H:%M:%S')
     
-        # lakeFS credentials from your docker-compose.yml
-    ACCESS_KEY = "access_key"
-    SECRET_KEY = "secret_key"
-    
-    # lakeFS endpoint (running locally)
-    lakefs_endpoint = "http://lakefs-dev:8000/"
-    
-    # lakeFS repository, branch, and file path
-    repo = "weather2"
-    branch = "main"
-    path = "weather2.parquet"
-    
-    # Construct the full lakeFS S3-compatible path
-    lakefs_s3_path = f"s3a://{repo}/{branch}/{path}"
-    
-    # Configure storage_options for lakeFS (S3-compatible)
-    storage_options = {
-        "key": ACCESS_KEY,
-        "secret": SECRET_KEY,
-        "client_kwargs": {
-            "endpoint_url": lakefs_endpoint
-        }
-    }
+    df.insert(0, 'index', range(1, len(df) + 1))
+
     df.to_parquet(
         lakefs_s3_path,
         storage_options=storage_options,
-        partition_cols=['year','month','day','hour'],
-        
+        partition_cols=['year', 'month', 'day', 'hour'],
+        index=False
     )
+
+    print("Done saving to lakeFS.")
+
+
+@flow(name='dust-concentration-pipeline', log_prints=True)
+def main_flow():
+    try:
+        # geojson_path = Path("/home/jovyan/work/myflow/bangkok_districts.geojson")
+        geojson_path = Path("bangkok_districts.geojson")
+        print(f"Loading GeoJSON from: {geojson_path}")
+        districts_gdf = gpd.read_file(geojson_path)
+
+        if districts_gdf.crs is None:
+            districts_gdf.set_crs(epsg=4326, inplace=True)
+        else:
+            districts_gdf = districts_gdf.to_crs(epsg=4326)
+    except Exception as e:
+        print(f"Failed to load GeoJSON: {e}")
+        return
+
+    try:
+        data = fetch_data()
+        df = data_processing(data, districts_gdf)
+
+        print(df.head())
+
+        ACCESS_KEY = "access_key"
+        SECRET_KEY = "secret_key"
+        lakefs_endpoint = "http://lakefs-dev:8000/"
+
+        repo = "dust-concentration"
+        branch = "main"
+        path = "dust_data.parquet"
+
+        lakefs_s3_path = f"s3a://{repo}/{branch}/{path}"
+
+        storage_options = {
+            "key": ACCESS_KEY,
+            "secret": SECRET_KEY,
+            "client_kwargs": {
+                "endpoint_url": lakefs_endpoint
+            }
+        }
+
+        load_to_lakefs(df, lakefs_s3_path, storage_options)
+    except Exception as e:
+        print(f"Flow failed: {e}")
+        return  
+
+
+if __name__ == "__main__":
+    main_flow()
