@@ -49,3 +49,4 @@ st.line_chart(temp_df.set_index('Time'))
 
 if st.button('Refresh Now'):
     st.experimental_rerun()
+
