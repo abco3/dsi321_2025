@@ -100,7 +100,6 @@ def load_to_lakefs(df: pd.DataFrame, lakefs_s3_path: str, storage_options: dict)
 @flow(name='dust-concentration-pipeline', log_prints=True)
 def main_flow():
     try:
-        # geojson_path = Path("/home/jovyan/work/myflow/bangkok_districts.geojson")
         geojson_path = Path("bangkok_districts.geojson")
         print(f"Loading GeoJSON from: {geojson_path}")
         districts_gdf = gpd.read_file(geojson_path)
