@@ -2,7 +2,9 @@ from prefect import flow
 from pathlib import Path
 
 source = str(Path.cwd())
-entrypoint = f"flow.py:main_flow"  
+
+entrypoint = f"flow.py:main_flow"
+
 print(f'entrypoint:{entrypoint}, source:{source}')
 
 if __name__ == "__main__":
