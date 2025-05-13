@@ -89,7 +89,8 @@ services:
 
   streamlit:
     build:
-      context: ./streamlit
+      context: .
+      dockerfile: streamlit/Dockerfile.streamlit
     ports:
       - "8501:8501"
     depends_on:
@@ -105,4 +106,3 @@ volumes:
 networks:
   prefect-network:
     driver: bridge
-
