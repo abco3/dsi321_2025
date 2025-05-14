@@ -12,8 +12,8 @@ if __name__ == "__main__":
         source=source,
         entrypoint=entrypoint,
     ).deploy(
-        name="pollution_deployment",
+        name="dust_deployment",
         parameters={},
         work_pool_name="default-agent-pool",
-        cron="3 * * * *", 
+        cron="25 * * * *", 
     )
