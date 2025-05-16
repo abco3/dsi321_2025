@@ -8,3 +8,9 @@ matplotlib
 fsspec==2025.3.2
 s3fs==2025.3.2
 geopandas
+fiona==1.9.5
+streamlit
+streamlit-autorefresh
+streamlit-aggrid
+lakefs-spec
+statsmodels==0.14.2
