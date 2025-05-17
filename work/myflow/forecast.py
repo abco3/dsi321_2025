@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from datetime import timedelta
+from datetime import timedelta, datetime
 from prefect import flow, task
 from statsmodels.tsa.arima.model import ARIMA
 
@@ -29,19 +29,16 @@ def read_lakefs_data() -> pd.DataFrame:
 @task
 def forecast_pm25_aqi(df: pd.DataFrame) -> pd.DataFrame:
     print(f"Forecasting PM2.5 and AQI for all stations...")
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
     df = df[~df['nameTH'].isin(OUTLIER_STATIONS)]
     df = df[['timestamp', 'nameTH', 'PM25.value', 'AQI.aqi']].dropna()
+    df['load_time'] = datetime.now()
 
     forecasts = []
 
     for station in df['nameTH'].unique():
-        station_df = df[df['nameTH'] == station].sort_values("timestamp")
-
-        duplicates_count = station_df['timestamp'].duplicated().sum()
-        if duplicates_count > 0:
-            print(f"Station {station} has {duplicates_count} duplicate timestamps. Dropping duplicates.")
-            station_df = station_df.drop_duplicates(subset='timestamp', keep='first')
+        station_df = df[df['nameTH'] == station].sort_values(['timestamp', 'load_time'])
+        station_df = station_df.drop_duplicates(subset="timestamp", keep="last")
 
         if station_df.shape[0] < 24:
             print(f"Skipping {station}: not enough data")
@@ -82,9 +79,6 @@ def forecast_pm25_aqi(df: pd.DataFrame) -> pd.DataFrame:
 
     return forecast_df
 
-
-
-@task
 def save_to_lakefs(df: pd.DataFrame):
     print(f"Saving forecast to: {LAKEFS_PATH_OUT}")
     df.to_parquet(
@@ -98,7 +92,6 @@ def save_to_lakefs(df: pd.DataFrame):
 def forecast_both_pipeline():
     df = read_lakefs_data()
     forecast_df = forecast_pm25_aqi(df)
-    #delete_old_forecast()
     save_to_lakefs(forecast_df)
 
 
